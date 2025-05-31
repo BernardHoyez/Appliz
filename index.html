@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Trace GPS - KML</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#4CAF50">
+  <link rel="icon" href="icons/icon-192.png">
+</head>
+<body>
+  <h1>Trace GPS - KML</h1>
+  <button id="startBtn">Démarrer</button>
+  <button id="stopBtn" disabled>Arrêter & Générer KML</button>
+  <p id="status">En attente…</p>
+
+  <script>
+    let watchId, positions = [];
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const statusText = document.getElementById('status');
+
+    startBtn.onclick = () => {
+      positions = [];
+      watchId = navigator.geolocation.watchPosition(
+        pos => {
+          const { latitude, longitude } = pos.coords;
+          positions.push({ lat: latitude, lon: longitude });
+          statusText.textContent = `Enregistrement… (${positions.length} points)`;
+        },
+        err => alert("Erreur GPS : " + err.message),
+        { enableHighAccuracy: true, maximumAge: 10000, timeout: 5000 }
+      );
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+    };
+
+    stopBtn.onclick = () => {
+      navigator.geolocation.clearWatch(watchId);
+      statusText.textContent = `Arrêté (${positions.length} points)`;
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+      if (positions.length) downloadKML(generateKML(positions));
+    };
+
+    function generateKML(points) {
+      const header = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>Trace GPS</name><Placemark><LineString><tessellate>1</tessellate><coordinates>`;
+      const coords = points.map(p => `${p.lon},${p.lat},0`).join(' ');
+      const footer = `</coordinates></LineString></Placemark></Document></kml>`;
+      return header + coords + footer;
+    }
+
+    function downloadKML(kml) {
+      const blob = new Blob([kml], { type: "application/vnd.google-earth.kml+xml" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "trace.kml";
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    // Register Service Worker
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('service-worker.js');
+    }
+  </script>
+</body>
+</html>
