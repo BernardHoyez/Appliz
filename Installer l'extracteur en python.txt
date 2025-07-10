@@ -1,0 +1,1 @@
+pyinstaller --onefile --windowed --icon=GPS_Extracteur_Icon.ico --hidden-import=piexif main.py
