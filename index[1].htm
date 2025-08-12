@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lecteur de Coordonnées GPS EXIF</title>
+    <link rel="manifest" href="/manifest.json">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #f0f2f5;
+            color: #333;
+            text-align: center;
+        }
+
+        .container {
+            background-color: #fff;
+            padding: 2em;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+            max-width: 600px;
+            width: 90%;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5em;
+        }
+
+        h1 {
+            color: #1a73e8;
+            margin: 0;
+            font-size: 1.8em;
+        }
+
+        .button-container {
+            display: flex;
+            justify-content: center;
+        }
+
+        #fileInputLabel {
+            background-color: #1a73e8;
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 1em;
+            font-weight: 600;
+            transition: background-color 0.3s ease;
+            box-shadow: 0 2px 10px rgba(26, 115, 232, 0.3);
+        }
+
+        #fileInputLabel:hover {
+            background-color: #1565c0;
+        }
+
+        #fileInput {
+            display: none;
+        }
+
+        .results {
+            text-align: left;
+            background-color: #f7f9fc;
+            padding: 1em;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .results p {
+            margin: 0.5em 0;
+            font-size: 1em;
+            word-wrap: break-word;
+        }
+
+        .results strong {
+            color: #000;
+        }
+
+        .error {
+            color: #d32f2f;
+            font-weight: bold;
+        }
+
+        .note {
+            font-size: 0.9em;
+            color: #555;
+            padding: 1em;
+            background-color: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            border-radius: 4px;
+            text-align: left;
+            margin-top: 1em;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>🔍 Lecteur de Coordonnées EXIF</h1>
+        <div class="button-container">
+            <label for="fileInput" id="fileInputLabel">Sélectionner une photo</label>
+            <input type="file" id="fileInput" accept="image/*">
+        </div>
+        
+        <div class="note">
+            ℹ️ Si vous utilisez **Android** et que les coordonnées ne s'affichent pas, veuillez sélectionner la photo directement depuis le dossier **DCIM** et non depuis la **Galerie**, car cette dernière peut supprimer les données GPS.
+        </div>
+        
+        <div id="results" class="results" style="display: none;">
+            <p><strong>DMS :</strong> <span id="dms-coords"></span></p>
+            <p><strong>Décimal :</strong> <span id="decimal-coords"></span></p>
+            <p><strong>Minutes décimales :</strong> <span id="min-decimal-coords"></span></p>
+            <p id="error-message" class="error"></p>
+        </div>
+    </div>
+
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('/service-worker.js')
+                    .then(registration => console.log('Service Worker enregistré:', registration.scope))
+                    .catch(error => console.error('Échec de l\'enregistrement:', error));
+            });
+        }
+    </script>
+    <script>
+        document.getElementById('fileInput').addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const url = URL.createObjectURL(file);
+            fetch(url)
+                .then(response => response.arrayBuffer())
+                .then(buffer => {
+                    try {
+                        const dataView = new DataView(buffer);
+                        const exif = findExifData(dataView);
+
+                        if (exif && exif.GPSLatitude && exif.GPSLongitude) {
+                            const coords = extractAndConvertGPS(exif);
+                            displayResults(coords);
+                        } else {
+                            // Message d'erreur mis à jour pour être plus explicite
+                            displayError("Aucune donnée GPS EXIF n'a été trouvée dans cette image. Pour les appareils Android, veuillez sélectionner une photo directement depuis le dossier DCIM.");
+                        }
+                    } catch (err) {
+                        console.error("Erreur lors de la lecture des EXIF:", err);
+                        displayError("Erreur lors de la lecture des données EXIF. Le fichier est peut-être corrompu ou d'un format non supporté.");
+                    } finally {
+                        URL.revokeObjectURL(url);
+                    }
+                })
+                .catch(err => {
+                    console.error("Erreur de lecture du fichier:", err);
+                    displayError("Impossible de lire le fichier. Veuillez vérifier qu'il s'agit bien d'une image.");
+                    URL.revokeObjectURL(url);
+                });
+        });
+
+        function displayResults(coords) {
+            document.getElementById('results').style.display = 'block';
+            document.getElementById('error-message').textContent = '';
+
+            const latDMS = toDMS(coords.latitude, coords.latRef);
+            const lonDMS = toDMS(coords.longitude, coords.lonRef);
+            document.getElementById('dms-coords').textContent = `${latDMS} / ${lonDMS}`;
+
+            document.getElementById('decimal-coords').textContent = `${coords.latitude.toFixed(6)}°${coords.latRef} / ${coords.longitude.toFixed(6)}°${coords.lonRef}`;
+
+            const latMinDec = toMinDec(coords.latitude);
+            const lonMinDec = toMinDec(coords.longitude);
+            document.getElementById('min-decimal-coords').textContent = `${latMinDec}°${coords.latRef} / ${lonMinDec}°${coords.lonRef}`;
+        }
+
+        function displayError(message) {
+            document.getElementById('results').style.display = 'block';
+            document.getElementById('dms-coords').textContent = '';
+            document.getElementById('decimal-coords').textContent = '';
+            document.getElementById('min-decimal-coords').textContent = '';
+            document.getElementById('error-message').textContent = message;
+        }
+        
+        function toDMS(decimal, ref) {
+            const absCoord = Math.abs(decimal);
+            const deg = Math.floor(absCoord);
+            const min = Math.floor((absCoord - deg) * 60);
+            const sec = ((absCoord - deg) * 60 - min) * 60;
+            return `${deg}° ${min}' ${sec.toFixed(2)}" ${ref}`;
+        }
+
+        function toMinDec(decimal) {
+            const absCoord = Math.abs(decimal);
+            const deg = Math.floor(absCoord);
+            const minDec = ((absCoord - deg) * 60);
+            return `${deg}° ${minDec.toFixed(3)}'`;
+        }
+        
+        function extractAndConvertGPS(exif) {
+            const lat = convertRationalArrayToDecimal(exif.GPSLatitude);
+            const lon = convertRationalArrayToDecimal(exif.GPSLongitude);
+
+            return {
+                latitude: exif.GPSLatitudeRef === 'S' ? -lat : lat,
+                longitude: exif.GPSLongitudeRef === 'W' ? -lon : lon,
+                latRef: exif.GPSLatitudeRef,
+                lonRef: exif.GPSLongitudeRef
+            };
+        }
+
+        function convertRationalArrayToDecimal(rationalArray) {
+            if (!rationalArray || rationalArray.length !== 3) return 0;
+            const deg = rationalArray[0];
+            const min = rationalArray[1];
+            const sec = rationalArray[2];
+            return deg + min / 60 + sec / 3600;
+        }
+
+        function findExifData(dataView) {
+            let offset = 0;
+            if (dataView.getUint16(offset) !== 0xFFD8) return null; // Not a JPEG
+
+            offset += 2;
+            while (offset < dataView.byteLength) {
+                if (dataView.getUint8(offset) !== 0xFF) break;
+                
+                const marker = dataView.getUint8(offset + 1);
+                offset += 2;
+                const length = dataView.getUint16(offset);
+
+                if (marker === 0xE1) { // APP1 marker for EXIF
+                    const exifIdentifier = dataView.getUint32(offset + 2);
+                    if (exifIdentifier === 0x45786966) { // 'Exif'
+                        return readExifTags(dataView, offset + 8, length - 8);
+                    }
+                }
+                offset += length;
+            }
+            return null;
+        }
+
+        function readExifTags(dataView, start, length) {
+            let tiffOffset = start;
+            const endianness = dataView.getUint16(tiffOffset) === 0x4949; // 'II' = little endian
+            
+            if (dataView.getUint16(tiffOffset) !== (endianness ? 0x4949 : 0x4d4d) || dataView.getUint16(tiffOffset + 2, endianness) !== 0x002a) {
+                return null;
+            }
+
+            const firstIFDOffset = dataView.getUint32(tiffOffset + 4, endianness);
+            return parseIFD(dataView, tiffOffset + firstIFDOffset, endianness, start);
+        }
+
+        function parseIFD(dataView, offset, endianness, tiffBase) {
+            const tags = {};
+            const numberOfTags = dataView.getUint16(offset, endianness);
+
+            for (let i = 0; i < numberOfTags; i++) {
+                const tagOffset = offset + 2 + (i * 12);
+                const tagId = dataView.getUint16(tagOffset, endianness);
+                const valueOffset = dataView.getUint32(tagOffset + 8, endianness);
+
+                if (tagId === 0x8825) { // GPS IFD
+                    const gpsOffset = tiffBase + valueOffset;
+                    parseGpsIFD(dataView, gpsOffset, endianness, tiffBase, tags);
+                }
+            }
+            return tags;
+        }
+
+        function parseGpsIFD(dataView, offset, endianness, tiffBase, tags) {
+            const numberOfTags = dataView.getUint16(offset, endianness);
+            for (let i = 0; i < numberOfTags; i++) {
+                const tagOffset = offset + 2 + (i * 12);
+                const tagId = dataView.getUint16(tagOffset, endianness);
+                const valueOffset = dataView.getUint32(tagOffset + 8, endianness);
+
+                switch (tagId) {
+                    case 0x0001: // GPSLatitudeRef
+                        tags.GPSLatitudeRef = String.fromCharCode(dataView.getUint8(tagOffset + 8));
+                        break;
+                    case 0x0002: // GPSLatitude
+                        tags.GPSLatitude = readRational(dataView, tiffBase + valueOffset, 3, endianness);
+                        break;
+                    case 0x0003: // GPSLongitudeRef
+                        tags.GPSLongitudeRef = String.fromCharCode(dataView.getUint8(tagOffset + 8));
+                        break;
+                    case 0x0004: // GPSLongitude
+                        tags.GPSLongitude = readRational(dataView, tiffBase + valueOffset, 3, endianness);
+                        break;
+                }
+            }
+        }
+
+        function readRational(dataView, offset, count, endianness) {
+            const result = [];
+            for (let i = 0; i < count; i++) {
+                const numerator = dataView.getUint32(offset, endianness);
+                const denominator = dataView.getUint32(offset + 4, endianness);
+                result.push(numerator / denominator);
+                offset += 8;
+            }
+            return result;
+        }
+    </script>
+</body>
+</html>
